@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Inhalator Tracker</title>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+body {
+  margin: 0;
+  font-family: Arial;
+  background: #f5f7fb;
+  overflow: hidden;
+}
+
+.container {
+  display: flex;
+  width: 200vw;
+  height: 100vh;
+  transition: transform 0.35s ease;
+}
+
+.page {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.big-value {
+  font-size: 70px;
+  font-weight: bold;
+  color: #2f80ed;
+}
+
+.small-text {
+  opacity: 0.7;
+  margin-top: 10px;
+  text-align: center;
+  padding: 0 20px;
+}
+
+.puff-btn {
+  background: #7ec8ff;
+  border: none;
+  font-size: 35px;
+  padding: 35px 70px;
+  border-radius: 25px;
+  color: white;
+  font-weight: bold;
+  margin-top: 20px;
+}
+
+.edit-btn {
+  margin-top: 15px;
+  background: #4caf50;
+  border: none;
+  font-size: 18px;
+  padding: 12px 25px;
+  border-radius: 10px;
+  color: white;
+}
+
+.topbar {
+  position: absolute;
+  top: 10px;
+  opacity: 0.6;
+  font-size: 13px;
+}
+
+#editBox {
+  margin-top: 15px;
+  background: white;
+  padding: 10px;
+  border-radius: 10px;
+  width: 320px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.dose-item {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid #eee;
+  padding-bottom: 8px;
+}
+
+input {
+  padding: 5px;
+}
+
+#chart {
+  width: 90vw !important;
+  height: 60vh !important;
+}
+</style>
+</head>
+
+<body>
+
+<div class="container" id="container">
+
+  <!-- FRONT -->
+  <div class="page">
+    <div class="topbar">← swipe / pilar → graf</div>
+
+    <div class="big-value" id="currentValue">0 µg</div>
+
+    <div class="small-text" id="nextDoseText"></div>
+
+    <button class="puff-btn" onclick="addPuff()">PUFF (200 µg)</button>
+    <button class="edit-btn" onclick="toggleEdit()">Ändra doser</button>
+
+    <div id="editBox" style="display:none;">
+      <h4>Doser</h4>
+      <div id="doseList"></div>
+    </div>
+  </div>
+
+  <!-- GRAPH -->
+  <div class="page">
+    <div class="topbar">← tillbaka</div>
+    <canvas id="chart"></canvas>
+  </div>
+
+</div>
+
+<script>
+let doses = [];
+
+const doseAmount = 200;
+const halfLife = 5;
+
+function save() {
+  localStorage.setItem("doses", JSON.stringify(doses));
+}
+
+function load() {
+  const d = localStorage.getItem("doses");
+  if (d) doses = JSON.parse(d);
+}
+
+function addPuff() {
+  doses.push({ time: Date.now() });
+  save();
+  updateAll();
+}
+
+function toggleEdit() {
+  const box = document.getElementById("editBox");
+  box.style.display = box.style.display === "none" ? "block" : "none";
+  updateDoseList();
+}
+
+function updateDoseList() {
+  const list = document.getElementById("doseList");
+  list.innerHTML = "";
+
+  doses.forEach((d, i) => {
+    const div = document.createElement("div");
+    div.className = "dose-item";
+
+    div.innerHTML = `
+      <label>Tid:</label>
+      <input type="datetime-local" value="${toInput(d.time)}"
+        onchange="changeTime(${i}, this.value)" />
+      <button onclick="removeDose(${i})">Ta bort</button>
+    `;
+
+    list.appendChild(div);
+  });
+}
+
+function toInput(time) {
+  const d = new Date(time - new Date(time).getTimezoneOffset()*60000);
+  return d.toISOString().slice(0,16);
+}
+
+function changeTime(i, value) {
+  doses[i].time = new Date(value).getTime();
+  save();
+  updateAll();
+}
+
+function removeDose(i) {
+  doses.splice(i, 1);
+  save();
+  updateAll();
+}
+
+function activeAtTime(time) {
+  return doses.reduce((sum, d) => {
+    const hours = (time - d.time) / 3600000;
+    if (hours < 0) return sum;
+    return sum + doseAmount * Math.pow(0.5, hours / halfLife);
+  }, 0);
+}
+
+function updateCurrentValue() {
+  const now = Date.now();
+  const val = activeAtTime(now);
+
+  document.getElementById("currentValue").innerText =
+    Math.round(val) + " µg";
+
+  updateNextDose(val);
+}
+
+function updateNextDose() {
+  const now = Date.now();
+  let result = null;
+
+  for (let i = 0; i <= 24; i += 0.1) {
+    const t = now + i * 3600000;
+    const val = activeAtTime(t);
+
+    if (val < 200) {
+      result = i;
+      break;
+    }
+  }
+
+  const el = document.getElementById("nextDoseText");
+
+  if (result === null) {
+    el.innerText = "Över 200 µg hela dygnet (modell)";
+  } else {
+    const h = Math.floor(result);
+    const m = Math.floor((result - h) * 60);
+    el.innerText = `Ta nästa dos (200 ug) om ${h}h ${m}min`;
+  }
+}
+
+function updateChart() {
+  const canvas = document.getElementById("chart");
+  if (!canvas) return;
+
+  canvas.width = canvas.offsetWidth;
+  canvas.height = canvas.offsetHeight;
+
+  const ctx = canvas.getContext("2d");
+  const now = Date.now();
+
+  const points = [];
+
+  for (let i = -24; i <= 24; i += 0.5) {
+    const t = now + i * 3600000;
+    points.push({ x: i, y: activeAtTime(t) });
+  }
+
+  if (window.chart) window.chart.destroy();
+
+  window.chart = new Chart(ctx, {
+    type: "line",
+    data: {
+      datasets: [{
+        label: "Aktiv substans (µg)",
+        data: points,
+        borderColor: "#2f80ed",
+        fill: true,
+        tension: 0.2
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      parsing: false,
+      scales: {
+        x: { title: { display: true, text: "Timmar från nu" } },
+        y: { title: { display: true, text: "µg" } }
+      }
+    }
+  });
+}
+
+function updateAll() {
+  updateCurrentValue();
+  updateDoseList();
+  updateChart();
+}
+
+/* SWIPE */
+let startX = 0;
+
+document.addEventListener("touchstart", e => {
+  startX = e.touches[0].clientX;
+});
+
+document.addEventListener("touchend", e => {
+  const diff = e.changedTouches[0].clientX - startX;
+  const c = document.getElementById("container");
+
+  if (diff < -50) {
+    c.style.transform = "translateX(-100vw)";
+    setTimeout(updateChart, 200);
+  }
+
+  if (diff > 50) {
+    c.style.transform = "translateX(0vw)";
+  }
+});
+
+/* PILAR */
+document.addEventListener("keydown", e => {
+  const c = document.getElementById("container");
+
+  if (e.key === "ArrowRight") {
+    c.style.transform = "translateX(-100vw)";
+    setTimeout(updateChart, 200);
+  }
+
+  if (e.key === "ArrowLeft") {
+    c.style.transform = "translateX(0vw)";
+  }
+});
+
+/* INIT */
+load();
+updateAll();
+</script>
+
+</body>
+</html>
